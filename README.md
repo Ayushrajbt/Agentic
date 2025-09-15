@@ -1,4 +1,4 @@
-# Evolyn Database Conversational Agent
+Database Conversational Agent
 
 A conversational AI agent that can interact with your Evolyn database to fetch account and facility information, save notes, and retrieve notes.
 
@@ -33,41 +33,9 @@ python3 app.py
 ├── app.py                 # Main conversational agent
 ├── database.py           # Database connection management
 ├── tools.py              # Database tools (fetch_account_details, fetch_facility_details, save_note, get_notes)
-├── populate_database.py  # Database setup and population script
-├── setup.sh              # Automated setup script
-├── mock_data.json        # Sample data for database population
 ├── requirements.txt      # Python dependencies
 └── .env                  # Environment variables (create this)
 ```
-
-## 🗄️ Database Schema
-
-### Accounts Table
-- `account_id` (Primary Key)
-- `account_name`
-- `status`
-- `created_at`
-- `pricing_model`
-- Address fields
-- Financial information (balance, points, etc.)
-- Rewards and loyalty data
-
-### Facilities Table
-- `facility_id` (Primary Key)
-- `facility_name`
-- `status`
-- `account_id` (Foreign Key)
-- Medical license information
-- Shipping address
-- Agreement details
-
-### Notes Table
-- `note_id` (Primary Key)
-- `account_id` (Foreign Key)
-- `note_content`
-- `created_at`
-- `updated_at`
-- `created_by`
 
 ## 🗣️ Usage Examples
 
@@ -115,10 +83,6 @@ python3 local_run.py
 
 ## 🛠️ Troubleshooting
 
-### Database Connection Issues
-- Verify your PostgreSQL server is running
-- Check database credentials in `.env` file
-- Ensure the `evolyn` database exists
 
 ### OpenAI API Issues
 - Verify your OpenAI API key is valid
