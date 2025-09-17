@@ -1,10 +1,12 @@
 from typing import Optional, Dict, Any, List
+from langchain_core.tools import tool
 from database import db
 import logging
 
 logger = logging.getLogger(__name__)
 
-def fetch_account_details(account_id: Optional[str] = None, account_name: Optional[str] = None) -> str:
+@tool
+def fetch_account_details(account_id: str) -> str:
     """
     Fetch account details from the database.
     
@@ -15,27 +17,20 @@ def fetch_account_details(account_id: Optional[str] = None, account_name: Option
         String containing account details or error message
     """
     try:
-        if not account_id and not account_name:
-            return "Please provide either account_id or account_name to search for account details."
+        if not account_id or not account_id.strip():
+            return "Please provide account_id to search for account details."
         
         # Build query based on provided parameters
-        if account_id:
-            query = """
-                SELECT * FROM accounts 
-                WHERE account_id = %(account_id)s
-            """
-            params = {"account_id": account_id}
-        else:
-            query = """
-                SELECT * FROM accounts 
-                WHERE account_name ILIKE %(account_name)s
-            """
-            params = {"account_name": f"%{account_name}%"}
+        query = """
+            SELECT * FROM accounts 
+            WHERE account_id = %(account_id)s
+        """
+        params = {"account_id": account_id}
         
         results = db.execute_query(query, params)
         
         if not results:
-            return f"No account found with the provided criteria."
+            return f"No account found with account_id '{account_id}'."
         
         if len(results) == 1:
             account = results[0]
@@ -58,7 +53,8 @@ def fetch_account_details(account_id: Optional[str] = None, account_name: Option
         logger.error(f"Error fetching account details: {e}")
         return f"Error fetching account details: {str(e)}"
 
-def fetch_facility_details(facility_id: Optional[str] = None, facility_name: Optional[str] = None, account_id: Optional[str] = None) -> str:
+@tool
+def fetch_facility_details(facility_id: Optional[str] = None, account_id: Optional[str] = None) -> str:
     """
     Fetch facility details from the database.
     
@@ -70,8 +66,8 @@ def fetch_facility_details(facility_id: Optional[str] = None, facility_name: Opt
         String containing facility details or error message
     """
     try:
-        if not facility_id and not facility_name and not account_id:
-            return "Please provide facility_id, facility_name, or account_id to search for facility details."
+        if not facility_id and not account_id:
+            return "Please provide facility_id or account_id to search for facility details."
         
         # Build query based on provided parameters
         conditions = []
@@ -81,12 +77,8 @@ def fetch_facility_details(facility_id: Optional[str] = None, facility_name: Opt
             conditions.append("facility_id = %(facility_id)s")
             params["facility_id"] = facility_id
         
-        if facility_name:
-            conditions.append("facility_name ILIKE %(facility_name)s")
-            params["facility_name"] = f"%{facility_name}%"
-        
         if account_id:
-            conditions.append("account_id = %(account_id)s")
+            conditions.append("f.account_id = %(account_id)s")
             params["account_id"] = account_id
         
         where_clause = " AND ".join(conditions)
@@ -127,6 +119,7 @@ def fetch_facility_details(facility_id: Optional[str] = None, facility_name: Opt
         return f"Error fetching facility details: {str(e)}"
 
 
+@tool
 def save_note(note_content: str, account_id: str) -> str:
     """
     Save a note for a specific account.
@@ -187,6 +180,7 @@ def save_note(note_content: str, account_id: str) -> str:
         logger.error(f"Error saving note: {e}")
         return f"Error saving note: {str(e)}"
 
+@tool
 def get_notes(account_id: str, limit: int = 10) -> str:
     """
     Get notes for a specific account.

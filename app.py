@@ -4,6 +4,7 @@ from langgraph.prebuilt import create_react_agent
 from dotenv import load_dotenv
 from tools import fetch_account_details, fetch_facility_details, save_note, get_notes
 from database import db
+from models import SimpleResponse
 import logging
 
 # Load environment variables
@@ -39,13 +40,17 @@ def create_agent():
 For note saving, when users say "Save this note: [content]" and an account_id is provided in the context,
 use the save_note tool with the note content and account_id.
 
+When account_id or facility_id context is provided in the message, use that information to help answer
+questions more effectively. For example, if facility_id is provided, you can fetch facility details
+or related account information to provide better context.
+
 Be helpful and provide clear, formatted responses. When users ask about accounts or facilities, 
 use the appropriate tools to fetch the information from the database."""
     )
     
     return agent
 
-def chat_with_agent(agent, message, conversation_history=None, account_id=None):
+def chat_with_agent(agent, message, conversation_history=None, account_id=None, facility_id=None):
     """Chat with the agent and return the response."""
     try:
         # Initialize conversation state
@@ -82,9 +87,13 @@ def chat_with_agent(agent, message, conversation_history=None, account_id=None):
                 response_content = getattr(last_message, 'content', str(last_message))
             
             # Convert conversation history to JSON-serializable format
+            # Filter out tool messages as they can't be reused in conversation history
             serializable_history = []
             for msg in result["messages"]:
                 if isinstance(msg, dict):
+                    # Skip tool messages as they can't be reused
+                    if msg.get("role") == "tool":
+                        continue
                     serializable_history.append(msg)
                 else:
                     # Convert LangChain message objects to dict format
@@ -94,28 +103,38 @@ def chat_with_agent(agent, message, conversation_history=None, account_id=None):
                     else:
                         role = 'assistant'
                     
+                    # Skip tool messages
+                    if role == "tool":
+                        continue
+                    
                     serializable_history.append({
                         "role": role,
                         "content": getattr(msg, 'content', str(msg))
                     })
             
-            # Return response and updated conversation history
-            return {
-                "response": response_content,
-                "conversation_history": serializable_history
-            }
+            # Return structured response and updated conversation history
+            return SimpleResponse(
+                account_id=account_id,
+                facility_id=facility_id,
+                response=response_content,
+                conversation_history=serializable_history
+            ).model_dump()
         else:
-            return {
-                "response": "I'm not sure how to respond to that.",
-                "conversation_history": conversation_state["messages"]
-            }
+            return SimpleResponse(
+                account_id=account_id,
+                facility_id=facility_id,
+                response="I'm not sure how to respond to that.",
+                conversation_history=conversation_state["messages"]
+            ).model_dump()
             
     except Exception as e:
         logger.error(f"Error in chat: {e}")
-        return {
-            "response": f"Sorry, I encountered an error: {e}",
-            "conversation_history": conversation_state.get("messages", [])
-        }
+        return SimpleResponse(
+            account_id=account_id,
+            facility_id=facility_id,
+            response=f"Sorry, I encountered an error: {e}",
+            conversation_history=conversation_state.get("messages", [])
+        ).model_dump()
 
 def main():
     """Main function to run the conversational agent."""
@@ -124,6 +143,7 @@ def main():
     print("Available commands:")
     print("- Ask about accounts: 'Show me account details for account_id 123'")
     print("- Ask about facilities: 'Show me facilities for account ABC'")
+    print("- Ask about specific facility: 'Show me facility details for facility_id F-123'")
     print("- Save notes: 'Save this note: [content]'")
     print("- Get notes: 'Show me notes for this account'")
     print()
