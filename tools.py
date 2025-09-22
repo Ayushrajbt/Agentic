@@ -10,13 +10,21 @@ logger = logging.getLogger(__name__)
 @tool
 def fetch_account_details(account_id: str) -> str:
     """
-    Fetch account details from the database.
+    Fetch comprehensive account details from the database including financial, rewards, and quarter information.
+    
+    Use this tool when users ask about:
+    - Account information (status, balance, rewards, quarter dates, tiers, etc.)
+    - Quarter end dates (account-specific quarters, NOT calendar quarters)
+    - Rewards and loyalty information (tiers, points, free vials, etc.)
+    - Financial information (balances, amounts due, invoices, etc.)
+    - Account overview or summary
+    - Any account-specific data or metrics
     
     Args:
         account_id: The account ID to search for
     
     Returns:
-        JSON string containing structured account details or error message
+        JSON string containing structured account details with facilities list, financial data, rewards info, and quarter end date
     """
     try:
         if not account_id or not account_id.strip():
@@ -44,14 +52,62 @@ def fetch_account_details(account_id: str) -> str:
         
         if len(results) == 1:
             account = results[0]
+            
+            # Get facilities for this account
+            facilities_query = """
+                SELECT facility_id as id, facility_name as name, status, 
+                       has_signed_medical_liability_agreement,
+                       shipping_address_line1, shipping_address_line2,
+                       shipping_address_city, shipping_address_state,
+                       shipping_address_zip, shipping_address_commercial
+                FROM facilities 
+                WHERE account_id = %(account_id)s
+            """
+            facilities = db.execute_query(facilities_query, {"account_id": account.get('account_id')})
+            
             response = AccountResponse(
                 success=True,
                 message="Account details retrieved successfully",
+                # Basic account info
                 account_id=account.get('account_id'),
-                account_name=account.get('account_name'),
+                name=account.get('name') or account.get('account_name'),  # Use name field, fallback to account_name
                 status=account.get('status'),
+                is_tna=account.get('is_tna'),
                 created_at=str(account.get('created_at')) if account.get('created_at') else None,
-                updated_at=str(account.get('updated_at')) if account.get('updated_at') else None
+                pricing_model=account.get('pricing_model'),
+                
+                # Address fields
+                address_line1=account.get('address_line1'),
+                address_line2=account.get('address_line2'),
+                address_city=account.get('address_city'),
+                address_state=account.get('address_state'),
+                address_postal_code=account.get('address_postal_code'),
+                address_country=account.get('address_country'),
+                
+                # Facilities list
+                facilities=facilities,
+                
+                # Financial fields
+                total_amount_due=float(account.get('total_amount_due')) if account.get('total_amount_due') is not None else None,
+                total_amount_due_this_week=float(account.get('total_amount_due_this_week')) if account.get('total_amount_due_this_week') is not None else None,
+                invoice_id=account.get('invoice_id'),
+                invoice_amount=float(account.get('invoice_amount')) if account.get('invoice_amount') is not None else None,
+                invoice_due_date=account.get('invoice_due_date'),
+                current_balance=float(account.get('current_balance')) if account.get('current_balance') is not None else None,
+                pending_balance=float(account.get('pending_balance')) if account.get('pending_balance') is not None else None,
+                
+                # Rewards/Loyalty fields
+                points_earned_this_quarter=account.get('points_earned_this_quarter'),
+                current_tier=account.get('current_tier'),
+                next_tier=account.get('next_tier'),
+                points_to_next_tier=account.get('points_to_next_tier'),
+                quarter_end_date=str(account.get('quarter_end_date')) if account.get('quarter_end_date') else None,
+                free_vials_available=account.get('free_vials_available'),
+                rewards_required_for_next_free_vial=account.get('rewards_required_for_next_free_vial'),
+                rewards_redeemed_towards_next_free_vial=account.get('rewards_redeemed_towards_next_free_vial'),
+                rewards_status=account.get('rewards_status'),
+                rewards_updated_at=str(account.get('rewards_updated_at')) if account.get('rewards_updated_at') else None,
+                evolux_level=account.get('evolux_level')
             )
             return response.model_dump_json()
         else:
@@ -77,14 +133,23 @@ def fetch_account_details(account_id: str) -> str:
 @tool
 def fetch_facility_details(facility_id: Optional[str] = None, account_id: Optional[str] = None) -> str:
     """
-    Fetch facility details from the database.
+    Fetch comprehensive facility details from the database including medical license, agreements, and account information.
+    
+    Use this tool when users ask about:
+    - Facility information (status, name, address, etc.)
+    - Medical license details (provider, expiration, status, etc.)
+    - License expiration dates and calculations
+    - Medical agreements and signing status
+    - Facility-specific data or metrics
+    - License provider information
+    - Agreement status and signing dates
     
     Args:
         facility_id: The facility ID to search for
         account_id: Filter facilities by account ID
     
     Returns:
-        JSON string containing structured facility details or error message
+        JSON string containing structured facility details with medical license info, agreement status, and account details
     """
     try:
         if not facility_id and not account_id:
@@ -128,12 +193,42 @@ def fetch_facility_details(facility_id: Optional[str] = None, account_id: Option
             response = FacilityResponse(
                 success=True,
                 message="Facility details retrieved successfully",
-                facility_id=facility.get('facility_id'),
-                facility_name=facility.get('facility_name'),
-                account_id=facility.get('account_id'),
+                id=facility.get('facility_id'),
+                name=facility.get('facility_name'),
                 status=facility.get('status'),
-                created_at=str(facility.get('created_at')) if facility.get('created_at') else None,
-                updated_at=str(facility.get('updated_at')) if facility.get('updated_at') else None
+                
+                # Medical license fields
+                has_signed_medical_liability_agreement=facility.get('has_signed_medical_liability_agreement'),
+                medical_license_id=facility.get('medical_license_id'),
+                medical_license_state=facility.get('medical_license_state'),
+                medical_license_number=facility.get('medical_license_number'),
+                medical_license_involvement=facility.get('medical_license_involvement'),
+                medical_license_expiration_date=str(facility.get('medical_license_expiration_date')) if facility.get('medical_license_expiration_date') else None,
+                medical_license_is_expired=facility.get('medical_license_is_expired'),
+                medical_license_status=facility.get('medical_license_status'),
+                medical_license_owner_first_name=facility.get('medical_license_owner_first_name'),
+                medical_license_owner_last_name=facility.get('medical_license_owner_last_name'),
+                
+                # Account information
+                account_id=facility.get('account_id'),
+                account_name=facility.get('account_name'),
+                account_status=facility.get('account_status'),
+                account_has_signed_financial_agreement=facility.get('account_has_signed_financial_agreement'),
+                account_has_accepted_jet_terms=facility.get('account_has_accepted_jet_terms'),
+                
+                # Agreement fields
+                agreement_status=facility.get('agreement_status'),
+                agreement_signed_at=str(facility.get('agreement_signed_at')) if facility.get('agreement_signed_at') else None,
+                agreement_type=facility.get('agreement_type'),
+                
+                # Address fields
+                shipping_address_line1=facility.get('shipping_address_line1'),
+                shipping_address_line2=facility.get('shipping_address_line2'),
+                shipping_address_city=facility.get('shipping_address_city'),
+                shipping_address_state=facility.get('shipping_address_state'),
+                shipping_address_zip=facility.get('shipping_address_zip'),
+                shipping_address_commercial=facility.get('shipping_address_commercial'),
+                sponsored=facility.get('sponsored')
             )
             return response.model_dump_json()
         else:
@@ -199,8 +294,8 @@ def save_note(note_content: str, account_id: str) -> str:
         
         # Insert the note
         insert_sql = """
-            INSERT INTO notes (account_id, note_content, created_by)
-            VALUES (%(account_id)s, %(note_content)s, %(created_by)s)
+            INSERT INTO notes (account_id, note_content)
+            VALUES (%(account_id)s, %(note_content)s)
             RETURNING note_id, created_at
         """
         
@@ -209,7 +304,6 @@ def save_note(note_content: str, account_id: str) -> str:
             {
                 "account_id": account_id,
                 "note_content": note_content.strip(),
-                "created_by": "conversational_agent"
             }
         )
         
@@ -241,7 +335,9 @@ def save_note(note_content: str, account_id: str) -> str:
 @tool
 def get_notes(account_id: str, limit: int = 10) -> str:
     """
-    Get notes for a specific account.
+    Get notes for a specific account. 
+    
+    CRITICAL: If user asks for "summary" or "summarize", do NOT list individual notes. Instead, synthesize the information into a brief overview highlighting main themes and key points.
     
     Args:
         account_id: The account ID to get notes for
@@ -273,7 +369,7 @@ def get_notes(account_id: str, limit: int = 10) -> str:
         
         # Get notes for the account
         notes_query = """
-            SELECT note_id, note_content, created_at, created_by
+            SELECT note_id, note_content, created_at
             FROM notes 
             WHERE account_id = %(account_id)s
             ORDER BY created_at DESC
@@ -298,7 +394,6 @@ def get_notes(account_id: str, limit: int = 10) -> str:
                 "note_id": note['note_id'],
                 "note_content": note['note_content'],
                 "created_at": str(note['created_at']),
-                "created_by": note['created_by']
             })
         
         response = NotesListResponse(

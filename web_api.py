@@ -7,6 +7,9 @@ Simple web interface that exposes the conversational agent through HTTP endpoint
 from flask import Flask, request, jsonify
 import logging
 from app import create_agent, chat_with_agent
+from conversation_service import conversation_service
+from models import ChatRequest
+from pydantic import ValidationError
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -47,15 +50,15 @@ def chat():
     Expected JSON payload:
     {
         "message": "Your message here",
-        "account_id": "optional account ID for context",
-        "facility_id": "optional facility ID for context",
-        "conversation_history": [optional array of previous messages]
+        "account_id": "account ID for context (required if facility_id not provided)",
+        "facility_id": "facility ID for context (required if account_id not provided)",
+        "conversation_id": "optional conversation ID to continue existing conversation"
     }
     
     Returns:
     {
         "response": "Agent response",
-        "conversation_history": [updated conversation history],
+        "conversation_id": "conversation ID for future requests",
         "account_id": "account ID if provided",
         "facility_id": "facility ID if provided",
         "status": "success"
@@ -69,29 +72,33 @@ def chat():
                 "status": "error"
             }), 500
         
-        # Get JSON data from request
-        data = request.get_json()
-        
-        if not data:
+        # Validate request using Pydantic
+        try:
+            request_data = ChatRequest(**request.get_json())
+        except ValidationError as e:
             return jsonify({
-                "error": "No JSON data provided",
+                "error": str(e),
                 "status": "error"
             }), 400
         
-        # Extract message
-        message = data.get('message', '').strip()
-        if not message:
-            return jsonify({
-                "error": "Message is required",
-                "status": "error"
-            }), 400
+        # Extract validated data
+        message = request_data.message.strip()
+        account_id = request_data.account_id.strip() if request_data.account_id else ''
+        facility_id = request_data.facility_id.strip() if request_data.facility_id else ''
+        conversation_id = request_data.conversation_id.strip() if request_data.conversation_id else ''
         
-        # Extract account_id and facility_id (optional)
-        account_id = data.get('account_id', '').strip()
-        facility_id = data.get('facility_id', '').strip()
-        
-        # Get conversation history (optional)
-        conversation_history = data.get('conversation_history', [])
+        # Get conversation history from database or initialize empty
+        conversation_history = []
+        if conversation_id:
+            # Try to get existing conversation
+            conversation = conversation_service.get_conversation(conversation_id)
+            if conversation:
+                conversation_history = conversation['conversation_history']
+            else:
+                return jsonify({
+                    "error": f"Conversation with ID {conversation_id} not found",
+                    "status": "error"
+                }), 404
         
         # Add context to message if account_id or facility_id is provided
         context_parts = []
@@ -108,10 +115,29 @@ def chat():
         # Chat with agent
         result = chat_with_agent(agent, contextual_message, conversation_history, account_id, facility_id)
         
-        # Return response with context IDs
+        # Get updated conversation history from the agent's internal state
+        # We need to reconstruct this from the conversation_history we passed in + the new exchange
+        updated_conversation_history = conversation_history.copy()
+        updated_conversation_history.append({"role": "user", "content": contextual_message})
+        updated_conversation_history.append({"role": "assistant", "content": result["response"]})
+        
+        if conversation_id:
+            # Update existing conversation
+            success = conversation_service.update_conversation(conversation_id, updated_conversation_history)
+            if not success:
+                logger.warning(f"Failed to update conversation {conversation_id}")
+        else:
+            # Create new conversation
+            conversation_id = conversation_service.create_conversation(
+                updated_conversation_history, 
+                account_id if account_id else None, 
+                facility_id if facility_id else None
+            )
+        
+        # Return response with conversation_id
         response_data = {
             "response": result["response"],
-            "conversation_history": result["conversation_history"],
+            "conversation_id": conversation_id,
             "status": "success"
         }
         
@@ -141,23 +167,20 @@ def chat_info():
             "message": "Show me facility details",
             "facility_id": "F-123456",
             "account_id": "A-011977763",
-            "conversation_history": []
+            "conversation_id": "optional-existing-conversation-id"
         },
         "example_response": {
             "response": "Here are the facility details...",
-            "conversation_history": [
-                {"role": "user", "content": "Show me facility details"},
-                {"role": "assistant", "content": "Here are the facility details..."}
-            ],
+            "conversation_id": "new-or-updated-conversation-id",
             "facility_id": "F-123456",
             "account_id": "A-011977763",
             "status": "success"
         },
         "payload_fields": {
             "message": "Required: Your question or request",
-            "account_id": "Optional: Account ID for context and future features",
-            "facility_id": "Optional: Facility ID for context and future features",
-            "conversation_history": "Optional: Array of previous messages for conversation continuity"
+            "account_id": "Required: Account ID for context (if facility_id not provided)",
+            "facility_id": "Required: Facility ID for context (if account_id not provided)",
+            "conversation_id": "Optional: Conversation ID to continue existing conversation"
         }
     })
 
@@ -177,9 +200,9 @@ def root():
             "chat_endpoint": "POST /chat",
             "payload": {
                 "message": "Your question or request",
-                "account_id": "Optional account ID for context",
-                "facility_id": "Optional facility ID for context",
-                "conversation_history": "Optional array of previous messages"
+                "account_id": "Account ID for context (required if facility_id not provided)",
+                "facility_id": "Facility ID for context (required if account_id not provided)",
+                "conversation_id": "Optional conversation ID to continue existing conversation"
             }
         },
         "examples": [

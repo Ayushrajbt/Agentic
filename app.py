@@ -37,16 +37,20 @@ def create_agent():
 3. Save notes for accounts (use save_note tool with note content and account_id)
 4. Retrieve notes for accounts (use get_notes tool with account_id)
 
+RESPONSE FORMAT RULES:
+- When users ask for "overview" (e.g., "fetch me account overview", "give me facility overview"): Return the raw JSON response from the tool as structured data
+- For all other queries (e.g., "what's my account status?", "show me account details"): Provide conversational, formatted responses
+
+IMPORTANT: Only fetch information that the user specifically asks for. If they ask for "account overview", only fetch account details. If they ask for "facility overview", only fetch facility details.
+
 For note saving, when users say "Save this note: [content]" and an account_id is provided in the context,
 use the save_note tool with the note content and account_id.
 
 When account_id or facility_id context is provided in the message, use that information to help answer
-questions more effectively. For example, if facility_id is provided, you can fetch facility details
-or related account information to provide better context.
+questions more effectively, but only fetch the specific information requested.
 
 Be helpful and provide clear, formatted responses. When users ask about accounts or facilities, 
-use the appropriate tools to fetch the information from the database."""
-    )
+use the appropriate tools to fetch the information from the database."""    )
     
     return agent
 
@@ -70,8 +74,16 @@ def chat_with_agent(agent, message, conversation_history=None, account_id=None, 
                     })
             conversation_state = {"messages": clean_history}
         
-        # Add user message to conversation state
-        conversation_state["messages"].append({"role": "user", "content": message})
+        # Add context information if available
+        context_message = ""
+        if account_id:
+            context_message += f"Account ID: {account_id}. "
+        if facility_id:
+            context_message += f"Facility ID: {facility_id}. "
+        
+        # Add user message with context to conversation state
+        full_message = context_message + message if context_message else message
+        conversation_state["messages"].append({"role": "user", "content": full_message})
         
         # Get agent response
         result = agent.invoke(conversation_state)
@@ -112,19 +124,17 @@ def chat_with_agent(agent, message, conversation_history=None, account_id=None, 
                         "content": getattr(msg, 'content', str(msg))
                     })
             
-            # Return structured response and updated conversation history
+            # Return structured response
             return SimpleResponse(
                 account_id=account_id,
                 facility_id=facility_id,
-                response=response_content,
-                conversation_history=serializable_history
+                response=response_content
             ).model_dump()
         else:
             return SimpleResponse(
                 account_id=account_id,
                 facility_id=facility_id,
-                response="I'm not sure how to respond to that.",
-                conversation_history=conversation_state["messages"]
+                response="I'm not sure how to respond to that."
             ).model_dump()
             
     except Exception as e:
@@ -132,8 +142,7 @@ def chat_with_agent(agent, message, conversation_history=None, account_id=None, 
         return SimpleResponse(
             account_id=account_id,
             facility_id=facility_id,
-            response=f"Sorry, I encountered an error: {e}",
-            conversation_history=conversation_state.get("messages", [])
+            response=f"Sorry, I encountered an error: {e}"
         ).model_dump()
 
 def main():
@@ -156,6 +165,24 @@ def main():
         print("❌ Database connection failed! Please check your .env file and database settings.")
         return
     
+    # Get account_id and facility_id from user
+    print("📋 Please provide your account and facility information:")
+    account_id = input("Account ID (optional, press Enter to skip): ").strip()
+    if not account_id:
+        account_id = None
+        print("ℹ️  No account ID provided. Continuing without account context.")
+    else:
+        print(f"✅ Using account ID: {account_id}")
+    
+    facility_id = input("Facility ID (optional, press Enter to skip): ").strip()
+    if not facility_id:
+        facility_id = None
+        print("ℹ️  No facility ID provided. Continuing without facility context.")
+    else:
+        print(f"✅ Using facility ID: {facility_id}")
+    
+    print()
+    
     # Create agent
     agent = create_agent()
     
@@ -177,10 +204,12 @@ def main():
                 continue
             
             # Chat with agent
-            result = chat_with_agent(agent, user_input, conversation_state["messages"])
+            result = chat_with_agent(agent, user_input, conversation_state["messages"], account_id, facility_id)
             
             print("🤖 Agent:", result["response"])
-            conversation_state["messages"] = result["conversation_history"]
+            # Update conversation state with the new exchange
+            conversation_state["messages"].append({"role": "user", "content": user_input})
+            conversation_state["messages"].append({"role": "assistant", "content": result["response"]})
             
             print()  # Add spacing between exchanges
             

@@ -110,6 +110,20 @@ def create_tables():
     );
     """
     
+    # Create convos table
+    convos_table_sql = """
+    CREATE TABLE IF NOT EXISTS convos (
+        conversation_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        conversation_history JSONB NOT NULL DEFAULT '[]',
+        account_id VARCHAR(50),
+        facility_id VARCHAR(50),
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (account_id) REFERENCES accounts(account_id) ON DELETE SET NULL,
+        FOREIGN KEY (facility_id) REFERENCES facilities(facility_id) ON DELETE SET NULL
+    );
+    """
+    
 
     
     try:
@@ -126,6 +140,10 @@ def create_tables():
                 # Create notes table
                 cursor.execute(notes_table_sql)
                 logger.info("✅ Notes table created successfully")
+                
+                # Create convos table
+                cursor.execute(convos_table_sql)
+                logger.info("✅ Convos table created successfully")
                 
                 conn.commit()
                 
