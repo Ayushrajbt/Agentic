@@ -107,9 +107,16 @@ class NotesListResponse(BaseModel):
 # Chat Request Model
 class ChatRequest(BaseModel):
     message: str
+    user_id: str  # Required field - user email
     account_id: Optional[str] = None
     facility_id: Optional[str] = None
     conversation_id: Optional[str] = None
+    
+    @validator('user_id')
+    def validate_user_id(cls, v):
+        if not v or not v.strip():
+            raise ValueError('user_id cannot be empty or contain only whitespace')
+        return v
     
     @validator('facility_id', always=True)
     def validate_context(cls, v, values):

@@ -6,7 +6,6 @@ from tools import fetch_account_details, fetch_facility_details, save_note, get_
 from database import db
 from models import SimpleResponse
 import logging
-
 # Load environment variables
 load_dotenv()
 
@@ -34,19 +33,21 @@ def create_agent():
         prompt="""You are a helpful database assistant for the Evolyn system. You can help users:
 1. Fetch account details by account ID or name
 2. Fetch facility details by facility ID, name, or account ID
-3. Save notes for accounts (use save_note tool with note content and account_id)
-4. Retrieve notes for accounts (use get_notes tool with account_id)
+3. Save notes for accounts (use save_note tool with note content, account_id, and user_id)
+4. Retrieve notes for accounts (use get_notes tool with account_id and optionally user_id)
 
 RESPONSE FORMAT RULES:
 - When users ask for "overview" (e.g., "fetch me account overview", "give me facility overview"): Return the raw JSON response from the tool as structured data
-- For all other queries (e.g., "what's my account status?", "show me account details"): Provide conversational, formatted responses
+- For all other queries (e.g., "what's my account status?"): Provide conversational, formatted responses
 
 IMPORTANT: Only fetch information that the user specifically asks for. If they ask for "account overview", only fetch account details. If they ask for "facility overview", only fetch facility details.
 
-For note saving, when users say "Save this note: [content]" and an account_id is provided in the context,
-use the save_note tool with the note content and account_id.
+For note operations:
+- When users say "Save this note: [content]" and account_id and user_id are provided in the context, use the save_note tool with note content, account_id, and user_id
+- When users ask for notes and user_id is provided in the context, use get_notes tool with account_id and user_id to get notes for that specific user
+- user_id is always required for note operations
 
-When account_id or facility_id context is provided in the message, use that information to help answer
+When account_id, facility_id, or user_id context is provided in the message, use that information to help answer
 questions more effectively, but only fetch the specific information requested.
 
 Be helpful and provide clear, formatted responses. When users ask about accounts or facilities, 
@@ -54,7 +55,7 @@ use the appropriate tools to fetch the information from the database."""    )
     
     return agent
 
-def chat_with_agent(agent, message, conversation_history=None, account_id=None, facility_id=None):
+def chat_with_agent(agent, message, conversation_history=None, account_id=None, facility_id=None, user_id=None):
     """Chat with the agent and return the response."""
     try:
         # Initialize conversation state
@@ -80,6 +81,8 @@ def chat_with_agent(agent, message, conversation_history=None, account_id=None, 
             context_message += f"Account ID: {account_id}. "
         if facility_id:
             context_message += f"Facility ID: {facility_id}. "
+        if user_id:
+            context_message += f"User ID: {user_id}. "
         
         # Add user message with context to conversation state
         full_message = context_message + message if context_message else message
@@ -153,8 +156,10 @@ def main():
     print("- Ask about accounts: 'Show me account details for account_id 123'")
     print("- Ask about facilities: 'Show me facilities for account ABC'")
     print("- Ask about specific facility: 'Show me facility details for facility_id F-123'")
-    print("- Save notes: 'Save this note: [content]'")
-    print("- Get notes: 'Show me notes for this account'")
+    print("- Save notes: 'Save this note: [content]' (requires user_id)")
+    print("- Get notes: 'Show me notes for this account' (requires user_id)")
+    print()
+    print("ℹ️  Note: User ID (email) is required for all operations.")
     print()
     
     # Test database connection
@@ -165,8 +170,19 @@ def main():
         print("❌ Database connection failed! Please check your .env file and database settings.")
         return
     
-    # Get account_id and facility_id from user
-    print("📋 Please provide your account and facility information:")
+    # Get user_id, account_id and facility_id from user
+    print("📋 Please provide your user and account information:")
+    
+    # Get user_id (required)
+    while True:
+        user_id = input("User ID (email) - REQUIRED: ").strip()
+        if user_id:
+            print(f"✅ Using user ID: {user_id}")
+            break
+        else:
+            print("❌ User ID is required. Please enter your email address.")
+    
+    # Get account_id (optional)
     account_id = input("Account ID (optional, press Enter to skip): ").strip()
     if not account_id:
         account_id = None
@@ -174,6 +190,7 @@ def main():
     else:
         print(f"✅ Using account ID: {account_id}")
     
+    # Get facility_id (optional)
     facility_id = input("Facility ID (optional, press Enter to skip): ").strip()
     if not facility_id:
         facility_id = None
@@ -204,7 +221,7 @@ def main():
                 continue
             
             # Chat with agent
-            result = chat_with_agent(agent, user_input, conversation_state["messages"], account_id, facility_id)
+            result = chat_with_agent(agent, user_input, conversation_state["messages"], account_id, facility_id, user_id)
             
             print("🤖 Agent:", result["response"])
             # Update conversation state with the new exchange

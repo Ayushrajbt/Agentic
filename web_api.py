@@ -52,6 +52,7 @@ def chat():
         "message": "Your message here",
         "account_id": "account ID for context (required if facility_id not provided)",
         "facility_id": "facility ID for context (required if account_id not provided)",
+        "user_id": "user ID (email) - required for all requests",
         "conversation_id": "optional conversation ID to continue existing conversation"
     }
     
@@ -61,6 +62,7 @@ def chat():
         "conversation_id": "conversation ID for future requests",
         "account_id": "account ID if provided",
         "facility_id": "facility ID if provided",
+        "user_id": "user ID if provided",
         "status": "success"
     }
     """
@@ -85,6 +87,7 @@ def chat():
         message = request_data.message.strip()
         account_id = request_data.account_id.strip() if request_data.account_id else ''
         facility_id = request_data.facility_id.strip() if request_data.facility_id else ''
+        user_id = request_data.user_id.strip() if request_data.user_id else ''
         conversation_id = request_data.conversation_id.strip() if request_data.conversation_id else ''
         
         # Get conversation history from database or initialize empty
@@ -100,12 +103,14 @@ def chat():
                     "status": "error"
                 }), 404
         
-        # Add context to message if account_id or facility_id is provided
+        # Add context to message if account_id, facility_id, or user_id is provided
         context_parts = []
         if account_id:
             context_parts.append(f"Account Context: {account_id}")
         if facility_id:
             context_parts.append(f"Facility Context: {facility_id}")
+        if user_id:
+            context_parts.append(f"User Context: {user_id}")
         
         if context_parts:
             contextual_message = f"[{', '.join(context_parts)}] {message}"
@@ -113,7 +118,7 @@ def chat():
             contextual_message = message
         
         # Chat with agent
-        result = chat_with_agent(agent, contextual_message, conversation_history, account_id, facility_id)
+        result = chat_with_agent(agent, contextual_message, conversation_history, account_id, facility_id, user_id)
         
         # Get updated conversation history from the agent's internal state
         # We need to reconstruct this from the conversation_history we passed in + the new exchange
@@ -141,11 +146,13 @@ def chat():
             "status": "success"
         }
         
-        # Include account_id and facility_id in response if provided
+        # Include account_id, facility_id, and user_id in response if provided
         if account_id:
             response_data["account_id"] = account_id
         if facility_id:
             response_data["facility_id"] = facility_id
+        if user_id:
+            response_data["user_id"] = user_id
         
         return jsonify(response_data)
         
@@ -167,6 +174,7 @@ def chat_info():
             "message": "Show me facility details",
             "facility_id": "F-123456",
             "account_id": "A-011977763",
+            "user_id": "user@example.com",
             "conversation_id": "optional-existing-conversation-id"
         },
         "example_response": {
@@ -174,12 +182,14 @@ def chat_info():
             "conversation_id": "new-or-updated-conversation-id",
             "facility_id": "F-123456",
             "account_id": "A-011977763",
+            "user_id": "user@example.com",
             "status": "success"
         },
         "payload_fields": {
             "message": "Required: Your question or request",
             "account_id": "Required: Account ID for context (if facility_id not provided)",
             "facility_id": "Required: Facility ID for context (if account_id not provided)",
+            "user_id": "Required: User ID (email) for all requests",
             "conversation_id": "Optional: Conversation ID to continue existing conversation"
         }
     })
@@ -202,6 +212,7 @@ def root():
                 "message": "Your question or request",
                 "account_id": "Account ID for context (required if facility_id not provided)",
                 "facility_id": "Facility ID for context (required if account_id not provided)",
+                "user_id": "User ID (email) - required for all requests",
                 "conversation_id": "Optional conversation ID to continue existing conversation"
             }
         },

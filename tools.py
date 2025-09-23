@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 @tool
 def fetch_account_details(account_id: str) -> str:
     """
-    Fetch comprehensive account details from the database including financial, rewards, and quarter information.
+    Fetch comprehensive account details from the database including financial, rewards, quarter information, and facility medical license details.
     
     Use this tool when users ask about:
     - Account information (status, balance, rewards, quarter dates, tiers, etc.)
@@ -18,13 +18,15 @@ def fetch_account_details(account_id: str) -> str:
     - Rewards and loyalty information (tiers, points, free vials, etc.)
     - Financial information (balances, amounts due, invoices, etc.)
     - Account overview or summary
+    - Medical license status, expiration dates, or license provider information
+    - Facility medical license details (status, owner, expiration, etc.)
     - Any account-specific data or metrics
-    
+        
     Args:
         account_id: The account ID to search for
     
     Returns:
-        JSON string containing structured account details with facilities list, financial data, rewards info, and quarter end date
+        JSON string containing structured account details with facilities list (including medical license data), financial data, rewards info, and quarter end date
     """
     try:
         if not account_id or not account_id.strip():
@@ -53,13 +55,20 @@ def fetch_account_details(account_id: str) -> str:
         if len(results) == 1:
             account = results[0]
             
-            # Get facilities for this account
+            # Get facilities for this account with medical license details
             facilities_query = """
                 SELECT facility_id as id, facility_name as name, status, 
                        has_signed_medical_liability_agreement,
+                       medical_license_id, medical_license_state, medical_license_number,
+                       medical_license_involvement, medical_license_expiration_date,
+                       medical_license_is_expired, medical_license_status,
+                       medical_license_owner_first_name, medical_license_owner_last_name,
+                       agreement_status, agreement_signed_at, agreement_type,
                        shipping_address_line1, shipping_address_line2,
                        shipping_address_city, shipping_address_state,
-                       shipping_address_zip, shipping_address_commercial
+                       shipping_address_zip, shipping_address_commercial,
+                       sponsored, account_has_signed_financial_agreement,
+                       account_has_accepted_jet_terms
                 FROM facilities 
                 WHERE account_id = %(account_id)s
             """
@@ -70,7 +79,7 @@ def fetch_account_details(account_id: str) -> str:
                 message="Account details retrieved successfully",
                 # Basic account info
                 account_id=account.get('account_id'),
-                name=account.get('name') or account.get('account_name'),  # Use name field, fallback to account_name
+                name=account.get('account_name'),  # Use account_name field from database
                 status=account.get('status'),
                 is_tna=account.get('is_tna'),
                 created_at=str(account.get('created_at')) if account.get('created_at') else None,
@@ -143,6 +152,8 @@ def fetch_facility_details(facility_id: Optional[str] = None, account_id: Option
     - Facility-specific data or metrics
     - License provider information
     - Agreement status and signing dates
+    - Medical license owner details
+    - License number and state information
     
     Args:
         facility_id: The facility ID to search for
@@ -173,7 +184,7 @@ def fetch_facility_details(facility_id: Optional[str] = None, account_id: Option
         
         where_clause = " AND ".join(conditions)
         query = f"""
-            SELECT f.*, a.account_name 
+            SELECT f.*, a.account_name, a.status as account_status
             FROM facilities f
             LEFT JOIN accounts a ON f.account_id = a.account_id
             WHERE {where_clause}
@@ -253,13 +264,14 @@ def fetch_facility_details(facility_id: Optional[str] = None, account_id: Option
 
 
 @tool
-def save_note(note_content: str, account_id: str) -> str:
+def save_note(note_content: str, account_id: str, user_id: str) -> str:
     """
-    Save a note for a specific account.
+    Save a note for a specific account and user.
     
     Args:
         note_content: The content of the note to save
         account_id: The account ID to associate the note with
+        user_id: The user ID (email) to associate the note with (required)
     
     Returns:
         JSON string confirming the note was saved or error message
@@ -279,6 +291,13 @@ def save_note(note_content: str, account_id: str) -> str:
             )
             return response.model_dump_json()
         
+        if not user_id.strip():
+            response = NoteResponse(
+                success=False,
+                message="User ID is required to save a note."
+            )
+            return response.model_dump_json()
+        
         # Check if account exists
         account_exists = db.execute_scalar(
             "SELECT COUNT(*) FROM accounts WHERE account_id = %(account_id)s",
@@ -294,8 +313,8 @@ def save_note(note_content: str, account_id: str) -> str:
         
         # Insert the note
         insert_sql = """
-            INSERT INTO notes (account_id, note_content)
-            VALUES (%(account_id)s, %(note_content)s)
+            INSERT INTO notes (account_id, user_id, note_content)
+            VALUES (%(account_id)s, %(user_id)s, %(note_content)s)
             RETURNING note_id, created_at
         """
         
@@ -303,6 +322,7 @@ def save_note(note_content: str, account_id: str) -> str:
             insert_sql,
             {
                 "account_id": account_id,
+                "user_id": user_id.strip(),
                 "note_content": note_content.strip(),
             }
         )
@@ -333,14 +353,15 @@ def save_note(note_content: str, account_id: str) -> str:
         return response.model_dump_json()
 
 @tool
-def get_notes(account_id: str, limit: int = 10) -> str:
+def get_notes(account_id: str, user_id: str, limit: int = 10) -> str:
     """
-    Get notes for a specific account. 
+    Get notes for a specific account and user. 
     
     CRITICAL: If user asks for "summary" or "summarize", do NOT list individual notes. Instead, synthesize the information into a brief overview highlighting main themes and key points.
     
     Args:
         account_id: The account ID to get notes for
+        user_id: The user ID (email) to filter notes by (required)
         limit: Maximum number of notes to return (default: 10)
     
     Returns:
@@ -351,6 +372,13 @@ def get_notes(account_id: str, limit: int = 10) -> str:
             response = NotesListResponse(
                 success=False,
                 message="Account ID is required to retrieve notes."
+            )
+            return response.model_dump_json()
+        
+        if not user_id.strip():
+            response = NotesListResponse(
+                success=False,
+                message="User ID is required to retrieve notes."
             )
             return response.model_dump_json()
         
@@ -367,16 +395,16 @@ def get_notes(account_id: str, limit: int = 10) -> str:
             )
             return response.model_dump_json()
         
-        # Get notes for the account
+        # Get notes for the account and user
         notes_query = """
-            SELECT note_id, note_content, created_at
+            SELECT note_id, note_content, user_id, created_at
             FROM notes 
-            WHERE account_id = %(account_id)s
+            WHERE account_id = %(account_id)s AND user_id = %(user_id)s
             ORDER BY created_at DESC
             LIMIT %(limit)s
         """
         
-        notes = db.execute_query(notes_query, {"account_id": account_id, "limit": limit})
+        notes = db.execute_query(notes_query, {"account_id": account_id, "user_id": user_id.strip(), "limit": limit})
         
         if not notes:
             response = NotesListResponse(
@@ -393,6 +421,7 @@ def get_notes(account_id: str, limit: int = 10) -> str:
             notes_list.append({
                 "note_id": note['note_id'],
                 "note_content": note['note_content'],
+                "user_id": note['user_id'],
                 "created_at": str(note['created_at']),
             })
         
