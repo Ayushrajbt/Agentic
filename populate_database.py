@@ -101,12 +101,15 @@ def create_tables():
     notes_table_sql = """
     CREATE TABLE IF NOT EXISTS notes (
         note_id SERIAL PRIMARY KEY,
-        account_id VARCHAR(50) NOT NULL,
+        account_id VARCHAR(50),
+        facility_id VARCHAR(50),
+        user_id VARCHAR(255) NOT NULL,
         note_content TEXT NOT NULL,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
         created_by VARCHAR(100) DEFAULT 'system',
-        FOREIGN KEY (account_id) REFERENCES accounts(account_id) ON DELETE CASCADE
+        FOREIGN KEY (account_id) REFERENCES accounts(account_id) ON DELETE CASCADE,
+        FOREIGN KEY (facility_id) REFERENCES facilities(facility_id) ON DELETE CASCADE
     );
     """
     
@@ -325,9 +328,9 @@ def populate_facilities(data):
             logger.error(f"❌ Error inserting facility {facility.get('id')}: {e}")
             raise
 
-def populate_note_saver(data):
-    """Populate the note-saver table with data."""
-    logger.info("Populating note-saver table...")
+def populate_notes(data):
+    """Populate the notes table with data."""
+    logger.info("Populating notes table...")
     
     # Get note data from the mock data, or create some sample notes
     notes_data = data.get('notes', [])
@@ -349,13 +352,14 @@ def populate_note_saver(data):
             for i, account in enumerate(accounts):
                 note_text = sample_notes[i % len(sample_notes)]
                 insert_sql = """
-                INSERT INTO "note-saver" (account_id, note, created_at)
-                VALUES (%(account_id)s, %(note)s, %(created_at)s)
+                INSERT INTO notes (account_id, user_id, note_content, created_at)
+                VALUES (%(account_id)s, %(user_id)s, %(note_content)s, %(created_at)s)
                 """
                 
                 note_data = {
                     'account_id': account['account_id'],
-                    'note': note_text,
+                    'user_id': 'system@example.com',
+                    'note_content': note_text,
                     'created_at': datetime.now()
                 }
                 
@@ -374,13 +378,14 @@ def populate_note_saver(data):
         for note in notes_data:
             try:
                 insert_sql = """
-                INSERT INTO "note-saver" (account_id, note, created_at)
-                VALUES (%(account_id)s, %(note)s, %(created_at)s)
+                INSERT INTO notes (account_id, user_id, note_content, created_at)
+                VALUES (%(account_id)s, %(user_id)s, %(note_content)s, %(created_at)s)
                 """
                 
                 note_data = {
                     'account_id': note.get('account_id'),
-                    'note': note.get('note'),
+                    'user_id': note.get('user_id', 'system@example.com'),
+                    'note_content': note.get('note'),
                     'created_at': parse_datetime(note.get('created_at')) or datetime.now()
                 }
                 
@@ -408,8 +413,8 @@ def verify_data():
         facility_count = db.execute_scalar("SELECT COUNT(*) FROM facilities")
         logger.info(f"📊 Total facilities: {facility_count}")
         
-        # Check note-saver count
-        note_count = db.execute_scalar('SELECT COUNT(*) FROM "note-saver"')
+        # Check notes count
+        note_count = db.execute_scalar("SELECT COUNT(*) FROM notes")
         logger.info(f"📊 Total notes: {note_count}")
         
         # Show sample data
@@ -423,10 +428,11 @@ def verify_data():
         for facility in facilities:
             logger.info(f"  - {facility['facility_name']} ({facility['facility_id']}) - {facility['status']}")
         
-        notes = db.execute_query('SELECT id, account_id, note, created_at FROM "note-saver" LIMIT 3')
+        notes = db.execute_query("SELECT note_id, account_id, facility_id, note_content, created_at FROM notes LIMIT 3")
         logger.info("📋 Sample notes:")
         for note in notes:
-            logger.info(f"  - Note {note['id']}: {note['note'][:50]}... (Account: {note['account_id']})")
+            context = f"Account: {note['account_id']}" if note['account_id'] else f"Facility: {note['facility_id']}"
+            logger.info(f"  - Note {note['note_id']}: {note['note_content'][:50]}... ({context})")
             
     except Exception as e:
         logger.error(f"❌ Error verifying data: {e}")
@@ -455,7 +461,7 @@ def main():
         # Populate data
         populate_accounts(data)
         populate_facilities(data)
-        populate_note_saver(data)
+        populate_notes(data)
         
         # Verify data
         verify_data()

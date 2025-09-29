@@ -1,16 +1,22 @@
 from typing import Optional, Dict, Any, List
 from langchain_core.tools import tool
+from langchain_core.runnables import RunnableConfig
 from database import db
 import logging
 import json
-from models import AccountResponse, FacilityResponse, NoteResponse, NotesListResponse
+from models import AccountResponse, FacilityResponse, NoteResponse, NotesListResponse, FacilityInfo, NoteInfo
 
 logger = logging.getLogger(__name__)
 
 @tool
-def fetch_account_details(account_id: str) -> str:
+def fetch_account_details(config: RunnableConfig) -> str:
     """
     Fetch comprehensive account details from the database including financial, rewards, quarter information, and facility medical license details.
+    
+    CROSS-REFERENCE INTELLIGENCE:
+    - If user asks for account information but only facility_id is provided, automatically get the account_id from the facility
+    - If both account_id and facility_id are provided, prioritize account_id but verify they match
+    - If neither is provided, return an error asking for account_id
     
     Use this tool when users ask about:
     - Account information (status, balance, rewards, quarter dates, tiers, etc.)
@@ -23,12 +29,61 @@ def fetch_account_details(account_id: str) -> str:
     - Any account-specific data or metrics
         
     Args:
-        account_id: The account ID to search for
+        config: A configuration object containing 'account_id', 'facility_id', and 'user_id'
     
     Returns:
         JSON string containing structured account details with facilities list (including medical license data), financial data, rewards info, and quarter end date
     """
     try:
+        # Extract IDs from RunnableConfig
+        account_id = config.get("configurable", {}).get("account_id")
+        facility_id = config.get("configurable", {}).get("facility_id")
+        user_id = config.get("configurable", {}).get("user_id")
+        
+        print(f"Fetching account details with account_id: {account_id}, facility_id: {facility_id}, user_id: {user_id}")
+        
+        # CROSS-REFERENCE INTELLIGENCE: Handle facility-to-account resolution
+        if not account_id and facility_id:
+            # User wants account info but only facility_id is provided - get account_id from facility
+            print(f"Cross-reference: Getting account_id from facility {facility_id}")
+            facility_query = """
+                SELECT account_id FROM facilities WHERE facility_id = %(facility_id)s
+            """
+            facility_result = db.execute_query(facility_query, {"facility_id": facility_id})
+            
+            if facility_result:
+                account_id = facility_result[0]['account_id']
+                print(f"Cross-reference: Found account_id {account_id} for facility {facility_id}")
+            else:
+                response = AccountResponse(
+                    success=False,
+                    message=f"Facility '{facility_id}' not found. Cannot determine account information."
+                )
+                return response.model_dump_json()
+        
+        elif account_id and facility_id:
+            # Both provided - verify they match
+            facility_query = """
+                SELECT account_id FROM facilities WHERE facility_id = %(facility_id)s
+            """
+            facility_result = db.execute_query(facility_query, {"facility_id": facility_id})
+            
+            if facility_result:
+                facility_account_id = facility_result[0]['account_id']
+                if facility_account_id != account_id:
+                    response = AccountResponse(
+                        success=False,
+                        message=f"Account ID '{account_id}' does not match facility '{facility_id}' which belongs to account '{facility_account_id}'."
+                    )
+                    return response.model_dump_json()
+                print(f"Verified: Account {account_id} matches facility {facility_id}")
+            else:
+                response = AccountResponse(
+                    success=False,
+                    message=f"Facility '{facility_id}' not found."
+                )
+                return response.model_dump_json()
+        
         if not account_id or not account_id.strip():
             response = AccountResponse(
                 success=False,
@@ -72,7 +127,18 @@ def fetch_account_details(account_id: str) -> str:
                 FROM facilities 
                 WHERE account_id = %(account_id)s
             """
-            facilities = db.execute_query(facilities_query, {"account_id": account.get('account_id')})
+            facilities_data = db.execute_query(facilities_query, {"account_id": account.get('account_id')})
+            
+            # Convert facilities to structured format
+            facilities = []
+            if facilities_data:
+                for facility in facilities_data:
+                    facility_info = FacilityInfo(
+                        id=facility.get('id'),
+                        name=facility.get('name'),
+                        status=facility.get('status')
+                    )
+                    facilities.append(facility_info)
             
             response = AccountResponse(
                 success=True,
@@ -140,9 +206,24 @@ def fetch_account_details(account_id: str) -> str:
         return response.model_dump_json()
 
 @tool
-def fetch_facility_details(facility_id: Optional[str] = None, account_id: Optional[str] = None) -> str:
+def fetch_facility_details(config: RunnableConfig) -> str:
     """
     Fetch comprehensive facility details from the database including medical license, agreements, and account information.
+    
+    IMPORTANT: This tool should ONLY be used when:
+    1. User asks for facility details/overview/summary
+    2. User asks for information about a specific facility ID
+    3. User asks for facility-specific information (medical license, agreements, etc.)
+    
+    CROSS-REFERENCE INTELLIGENCE:
+    - If user asks for facility information but only account_id is provided, get all facilities for that account
+    - If both account_id and facility_id are provided, prioritize facility_id but verify they match
+    - If neither is provided, return an error asking for facility_id or account_id
+    
+    CRITICAL FALLBACK RULE:
+    - If user asks for a specific facility ID (e.g., "Show me facility F-123456") but that facility doesn't exist or doesn't match the context facility_id, return an error message saying "Sorry, I don't have information for the Facility ID provided by user"
+    - DO NOT return information for a different facility just because it exists in the context
+    - Always prioritize the specific facility ID mentioned by the user over context facility_id
     
     Use this tool when users ask about:
     - Facility information (status, name, address, etc.)
@@ -156,13 +237,19 @@ def fetch_facility_details(facility_id: Optional[str] = None, account_id: Option
     - License number and state information
     
     Args:
-        facility_id: The facility ID to search for
-        account_id: Filter facilities by account ID
+        config: A configuration object containing 'account_id', 'facility_id', and 'user_id'
     
     Returns:
         JSON string containing structured facility details with medical license info, agreement status, and account details
     """
     try:
+        # Extract IDs from RunnableConfig
+        account_id = config.get("configurable", {}).get("account_id")
+        facility_id = config.get("configurable", {}).get("facility_id")
+        user_id = config.get("configurable", {}).get("user_id")
+        
+        print(f"Fetching facility details with account_id: {account_id}, facility_id: {facility_id}, user_id: {user_id}")
+        
         if not facility_id and not account_id:
             response = FacilityResponse(
                 success=False,
@@ -183,6 +270,7 @@ def fetch_facility_details(facility_id: Optional[str] = None, account_id: Option
             params["account_id"] = account_id
         
         where_clause = " AND ".join(conditions)
+        
         query = f"""
             SELECT f.*, a.account_name, a.status as account_status
             FROM facilities f
@@ -190,8 +278,9 @@ def fetch_facility_details(facility_id: Optional[str] = None, account_id: Option
             WHERE {where_clause}
         """
         
-        results = db.execute_query(query, params)
         
+        results = db.execute_query(query, params)
+        logger.info(f"AAAAAAAAAAAAAAAAAAAAAAAAA: {results}")
         if not results:
             response = FacilityResponse(
                 success=False,
@@ -200,6 +289,7 @@ def fetch_facility_details(facility_id: Optional[str] = None, account_id: Option
             return response.model_dump_json()
         
         if len(results) == 1:
+            logger.info("This belongs to single result", results)
             facility = results[0]
             response = FacilityResponse(
                 success=True,
@@ -243,6 +333,7 @@ def fetch_facility_details(facility_id: Optional[str] = None, account_id: Option
             )
             return response.model_dump_json()
         else:
+            logger.info("This belongs to Multiple result", results)
             # Multiple facilities found
             facility_list = []
             for facility in results:
@@ -264,57 +355,97 @@ def fetch_facility_details(facility_id: Optional[str] = None, account_id: Option
 
 
 @tool
-def save_note(note_content: str, account_id: str, user_id: str) -> str:
+def save_note(config: RunnableConfig) -> str:
     """
-    Save a note for a specific account and user.
+    Save a note for a specific account or facility and user.
+    
+    IMPORTANT: This tool expects the note content to be already extracted from the user message.
+    The agent should extract the actual note content (e.g., "I am Ayush" from "Save this note: I am Ayush")
+    and pass it as note_content in the RunnableConfig.
     
     Args:
-        note_content: The content of the note to save
-        account_id: The account ID to associate the note with
-        user_id: The user ID (email) to associate the note with (required)
+        config: A configuration object containing 'user_id', 'account_id', 'facility_id', and 'note_content'
+               where note_content should be the extracted content without any prefixes like "Save this note:"
     
     Returns:
         JSON string confirming the note was saved or error message
     """
     try:
-        if not note_content.strip():
+        # Extract parameters from RunnableConfig
+        note_content = config.get("configurable", {}).get("note_content")
+        user_id = config.get("configurable", {}).get("user_id")
+        account_id = config.get("configurable", {}).get("account_id")
+        facility_id = config.get("configurable", {}).get("facility_id")
+        
+        print(f"Saving note with user_id: {user_id}, account_id: {account_id}, facility_id: {facility_id}")
+        print(f"Note content: {note_content}")
+        
+        # Note content should be extracted by the agent from user message
+        # The agent should pass the actual note content, not the full message
+        
+        if not note_content or not note_content.strip():
             response = NoteResponse(
                 success=False,
-                message="Note content cannot be empty."
+                message="Note content cannot be empty. Please provide the note content to save."
             )
             return response.model_dump_json()
         
-        if not account_id.strip():
-            response = NoteResponse(
-                success=False,
-                message="Account ID is required to save a note."
-            )
-            return response.model_dump_json()
-        
-        if not user_id.strip():
+        if not user_id or not user_id.strip():
             response = NoteResponse(
                 success=False,
                 message="User ID is required to save a note."
             )
             return response.model_dump_json()
         
-        # Check if account exists
-        account_exists = db.execute_scalar(
-            "SELECT COUNT(*) FROM accounts WHERE account_id = %(account_id)s",
-            {"account_id": account_id}
-        )
-        
-        if account_exists == 0:
+        # At least one of account_id or facility_id must be provided
+        if not account_id and not facility_id:
             response = NoteResponse(
                 success=False,
-                message=f"Account with ID '{account_id}' not found. Cannot save note."
+                message="Either account_id or facility_id is required to save a note."
             )
             return response.model_dump_json()
         
+        # Check if account exists (if account_id provided)
+        if account_id:
+            account_exists = db.execute_scalar(
+                "SELECT COUNT(*) FROM accounts WHERE account_id = %(account_id)s",
+                {"account_id": account_id}
+            )
+            
+            if account_exists == 0:
+                response = NoteResponse(
+                    success=False,
+                    message=f"Account with ID '{account_id}' not found. Cannot save note."
+                )
+                return response.model_dump_json()
+        
+        # Check if facility exists (if facility_id provided)
+        if facility_id:
+            facility_exists = db.execute_scalar(
+                "SELECT COUNT(*) FROM facilities WHERE facility_id = %(facility_id)s",
+                {"facility_id": facility_id}
+            )
+            
+            if facility_exists == 0:
+                response = NoteResponse(
+                    success=False,
+                    message=f"Facility with ID '{facility_id}' not found. Cannot save note."
+                )
+                return response.model_dump_json()
+        
+        # Handle flexible account/facility relationships:
+        # - If only account_id: save with account_id, facility_id = NULL
+        # - If only facility_id: save with facility_id, account_id = NULL  
+        # - If both: save with both account_id and facility_id
+        
+        # Convert empty strings to None for proper NULL handling
+        account_id = account_id if account_id and account_id.strip() else None
+        facility_id = facility_id if facility_id and facility_id.strip() else None
+        
         # Insert the note
         insert_sql = """
-            INSERT INTO notes (account_id, user_id, note_content)
-            VALUES (%(account_id)s, %(user_id)s, %(note_content)s)
+            INSERT INTO notes (account_id, facility_id, user_id, note_content)
+            VALUES (%(account_id)s, %(facility_id)s, %(user_id)s, %(note_content)s)
             RETURNING note_id, created_at
         """
         
@@ -322,6 +453,7 @@ def save_note(note_content: str, account_id: str, user_id: str) -> str:
             insert_sql,
             {
                 "account_id": account_id,
+                "facility_id": facility_id,
                 "user_id": user_id.strip(),
                 "note_content": note_content.strip(),
             }
@@ -331,9 +463,17 @@ def save_note(note_content: str, account_id: str, user_id: str) -> str:
             note_id = result[0]['note_id']
             created_at = result[0]['created_at']
             
+            # Create appropriate context message based on what was provided
+            if account_id and facility_id:
+                context = f"Account: {account_id} and Facility: {facility_id}"
+            elif account_id:
+                context = f"Account: {account_id}"
+            else:
+                context = f"Facility: {facility_id}"
+                
             response = NoteResponse(
                 success=True,
-                message=f"Note saved successfully! Note ID: {note_id}, Created: {created_at}",
+                message=f"Note saved successfully for {context}! Note ID: {note_id}, Created: {created_at}",
                 note_id=note_id
             )
             return response.model_dump_json()
@@ -353,63 +493,123 @@ def save_note(note_content: str, account_id: str, user_id: str) -> str:
         return response.model_dump_json()
 
 @tool
-def get_notes(account_id: str, user_id: str, limit: int = 10) -> str:
+def get_notes(config: RunnableConfig) -> str:
     """
-    Get notes for a specific account and user. 
+    Get notes for a specific account or facility and user. 
     
     CRITICAL: If user asks for "summary" or "summarize", do NOT list individual notes. Instead, synthesize the information into a brief overview highlighting main themes and key points.
     
     Args:
-        account_id: The account ID to get notes for
-        user_id: The user ID (email) to filter notes by (required)
-        limit: Maximum number of notes to return (default: 10)
+        config: A configuration object containing 'user_id', 'account_id', 'facility_id', and 'limit'
     
     Returns:
         JSON string containing the notes or error message
     """
     try:
-        if not account_id.strip():
-            response = NotesListResponse(
-                success=False,
-                message="Account ID is required to retrieve notes."
-            )
-            return response.model_dump_json()
+        # Extract parameters from RunnableConfig
+        user_id = config.get("configurable", {}).get("user_id")
+        account_id = config.get("configurable", {}).get("account_id")
+        facility_id = config.get("configurable", {}).get("facility_id")
+        limit = config.get("configurable", {}).get("limit", 10)
         
-        if not user_id.strip():
+        print(f"Getting notes with user_id: {user_id}, account_id: {account_id}, facility_id: {facility_id}, limit: {limit}")
+        
+        if not user_id or not user_id.strip():
             response = NotesListResponse(
                 success=False,
                 message="User ID is required to retrieve notes."
             )
             return response.model_dump_json()
         
-        # Check if account exists
-        account_exists = db.execute_scalar(
-            "SELECT COUNT(*) FROM accounts WHERE account_id = %(account_id)s",
-            {"account_id": account_id}
-        )
-        
-        if account_exists == 0:
+        # At least one of account_id or facility_id must be provided
+        if not account_id and not facility_id:
             response = NotesListResponse(
                 success=False,
-                message=f"Account with ID '{account_id}' not found."
+                message="Either account_id or facility_id is required to retrieve notes."
             )
             return response.model_dump_json()
         
-        # Get notes for the account and user
-        notes_query = """
-            SELECT note_id, note_content, user_id, created_at
-            FROM notes 
-            WHERE account_id = %(account_id)s AND user_id = %(user_id)s
-            ORDER BY created_at DESC
-            LIMIT %(limit)s
-        """
+        # Check if account exists (if account_id provided)
+        if account_id:
+            account_exists = db.execute_scalar(
+                "SELECT COUNT(*) FROM accounts WHERE account_id = %(account_id)s",
+                {"account_id": account_id}
+            )
+            
+            if account_exists == 0:
+                response = NotesListResponse(
+                    success=False,
+                    message=f"Account with ID '{account_id}' not found."
+                )
+                return response.model_dump_json()
         
-        notes = db.execute_query(notes_query, {"account_id": account_id, "user_id": user_id.strip(), "limit": limit})
+        # Check if facility exists (if facility_id provided)
+        if facility_id:
+            facility_exists = db.execute_scalar(
+                "SELECT COUNT(*) FROM facilities WHERE facility_id = %(facility_id)s",
+                {"facility_id": facility_id}
+            )
+            
+            if facility_exists == 0:
+                response = NotesListResponse(
+                    success=False,
+                    message=f"Facility with ID '{facility_id}' not found."
+                )
+                return response.model_dump_json()
+        
+        # Convert empty strings to None for proper NULL handling
+        account_id = account_id if account_id and account_id.strip() else None
+        facility_id = facility_id if facility_id and facility_id.strip() else None
+        
+        # Build query based on what's provided
+        if account_id and facility_id:
+            # Both provided - get notes for both account and facility
+            notes_query = """
+                SELECT note_id, note_content, user_id, created_at, account_id, facility_id
+                FROM notes 
+                WHERE ((account_id = %(account_id)s AND facility_id IS NULL) OR 
+                       (facility_id = %(facility_id)s AND account_id IS NULL) OR
+                       (account_id = %(account_id)s AND facility_id = %(facility_id)s)) 
+                AND user_id = %(user_id)s
+                ORDER BY created_at DESC
+                LIMIT %(limit)s
+            """
+            params = {"account_id": account_id, "facility_id": facility_id, "user_id": user_id.strip(), "limit": limit}
+        elif account_id:
+            # Only account_id provided - get account-level notes (facility_id IS NULL)
+            notes_query = """
+                SELECT note_id, note_content, user_id, created_at, account_id, facility_id
+                FROM notes 
+                WHERE account_id = %(account_id)s AND facility_id IS NULL AND user_id = %(user_id)s
+                ORDER BY created_at DESC
+                LIMIT %(limit)s
+            """
+            params = {"account_id": account_id, "user_id": user_id.strip(), "limit": limit}
+        else:
+            # Only facility_id provided - get facility-level notes (account_id IS NULL)
+            notes_query = """
+                SELECT note_id, note_content, user_id, created_at, account_id, facility_id
+                FROM notes 
+                WHERE facility_id = %(facility_id)s AND account_id IS NULL AND user_id = %(user_id)s
+                ORDER BY created_at DESC
+                LIMIT %(limit)s
+            """
+            params = {"facility_id": facility_id, "user_id": user_id.strip(), "limit": limit}
+        
+        notes = db.execute_query(notes_query, params)
         
         if not notes:
+            # Create appropriate context message
+            if account_id and facility_id:
+                context = f"account '{account_id}' and facility '{facility_id}'"
+            elif account_id:
+                context = f"account '{account_id}'"
+            else:
+                context = f"facility '{facility_id}'"
+                
             response = NotesListResponse(
                 success=True,
-                message=f"No notes found for account '{account_id}'.",
+                message=f"No notes found for {context}.",
                 notes=[],
                 total_count=0
             )
@@ -418,16 +618,25 @@ def get_notes(account_id: str, user_id: str, limit: int = 10) -> str:
         # Format the notes
         notes_list = []
         for note in notes:
-            notes_list.append({
-                "note_id": note['note_id'],
-                "note_content": note['note_content'],
-                "user_id": note['user_id'],
-                "created_at": str(note['created_at']),
-            })
+            note_info = NoteInfo(
+                note_id=note['note_id'],
+                note_content=note['note_content'],
+                user_id=note['user_id'],
+                created_at=str(note['created_at'])
+            )
+            notes_list.append(note_info)
         
+        # Create appropriate context message
+        if account_id and facility_id:
+            context = f"account {account_id} and facility {facility_id}"
+        elif account_id:
+            context = f"account {account_id}"
+        else:
+            context = f"facility {facility_id}"
+            
         response = NotesListResponse(
             success=True,
-            message=f"Retrieved {len(notes)} notes for account {account_id}",
+            message=f"Retrieved {len(notes)} notes for {context}",
             notes=notes_list,
             total_count=len(notes)
         )

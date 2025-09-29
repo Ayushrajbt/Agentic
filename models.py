@@ -1,5 +1,6 @@
-from pydantic import BaseModel, validator
-from typing import Optional, List
+from email import message
+from pydantic import BaseModel, validator, Field
+from typing import Optional, List, Any
 from datetime import datetime
 
 class SimpleResponse(BaseModel):
@@ -7,6 +8,19 @@ class SimpleResponse(BaseModel):
     facility_id: Optional[str] = None
     response: str
     conversation_id: Optional[str] = None
+
+# Facility info for account overview
+class FacilityInfo(BaseModel):
+    id: Optional[str] = None
+    name: Optional[str] = None
+    status: Optional[str] = None
+
+# Note info for notes list
+class NoteInfo(BaseModel):
+    note_id: Optional[int] = None
+    note_content: Optional[str] = None
+    user_id: Optional[str] = None
+    created_at: Optional[str] = None
 
 # Tool Response Models
 class AccountResponse(BaseModel):
@@ -29,7 +43,7 @@ class AccountResponse(BaseModel):
     address_country: Optional[str] = None
     
     # Facilities list
-    facilities: Optional[List[dict]] = None
+    facilities: Optional[List[FacilityInfo]] = None
     
     # Financial fields
     total_amount_due: Optional[float] = None
@@ -101,7 +115,7 @@ class NoteResponse(BaseModel):
 class NotesListResponse(BaseModel):
     success: bool
     message: Optional[str] = None
-    notes: List[dict] = []
+    notes: List[NoteInfo] = []
     total_count: int = 0
 
 # Chat Request Model
@@ -123,6 +137,41 @@ class ChatRequest(BaseModel):
         account_id = values.get('account_id')
         facility_id = v
         
-        if not account_id and not facility_id:
+        # If both are None or empty, raise error
+        if (not account_id or not account_id.strip()) and (not facility_id or not facility_id.strip()):
             raise ValueError('Either account_id or facility_id is required')
         return v
+
+class AgentStructuredResponse(BaseModel):
+    """
+    Structured response model for the agent that provides consistent output format
+    with both conversational response and structured data components.
+    """
+    final_response: str = Field(description="The main conversational response to the user in Markdown format")
+    account_details: Optional[AccountResponse] = Field(
+        default=None, 
+        description="Account details when user asks for account information or overview"
+    )
+    facility_details: Optional[FacilityResponse] = Field(
+        default=None, 
+        description="Facility details when user asks for facility information or overview"
+    )
+    notes_data: Optional[NotesListResponse] = Field(
+        default=None, 
+        description="Notes data when user asks for notes or note summaries"
+    )
+    message: Optional[str] = Field(default=None, description="final response to the user in bullet points")
+    response_type: str = Field(
+        default="conversational",
+        description="""
+        account_overview: Set when user explicitly asks for complete account details/overview/summary
+        facility_overview: Set when user explicitly asks for complete facility details/overview/summary  
+        notes_overview: Set when user explicitly asks for notes or note summaries
+        conversational: For all other queries including specific questions about balances, invoices, individual properties, or general conversation
+        """
+    )
+    conversation_id: Optional[str] = Field(default=None, description="ID of the current conversation")
+    user_id: Optional[str] = Field(default=None, description="ID of the user making the request")
+    
+    class Config:
+        extra = "forbid"

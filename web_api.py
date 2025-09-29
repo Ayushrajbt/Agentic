@@ -124,7 +124,10 @@ def chat():
         # We need to reconstruct this from the conversation_history we passed in + the new exchange
         updated_conversation_history = conversation_history.copy()
         updated_conversation_history.append({"role": "user", "content": contextual_message})
-        updated_conversation_history.append({"role": "assistant", "content": result["response"]})
+        
+        # Handle both old and new response formats
+        response_text = result.get("final_response", result.get("response", "I'm not sure how to respond to that."))
+        updated_conversation_history.append({"role": "assistant", "content": response_text})
         
         if conversation_id:
             # Update existing conversation
@@ -138,14 +141,31 @@ def chat():
                 account_id if account_id else None, 
                 facility_id if facility_id else None
             )
-        
-        # Return response with conversation_id
+                
+        # Start with basic response fields
         response_data = {
-            "response": result["response"],
+            "final_response": result.get("final_response", "I'm not sure how to respond to that."),
             "conversation_id": conversation_id,
             "status": "success"
         }
-        
+
+        if result.get("message"):
+            response_data["message"] = result.get("message")
+
+
+        # Include structured data only for overview queries
+        response_type = result.get("response_type", "conversational")
+        if response_type in ["account_overview", "facility_overview", "notes_overview"]:
+            response_data["response_type"] = response_type
+            
+            # Only include non-null structured fields
+            if result.get("account_details"):
+                response_data["account_details"] = result.get("account_details")
+            if result.get("facility_details"):
+                response_data["facility_details"] = result.get("facility_details")
+            if result.get("notes_data"):
+                response_data["notes_data"] = result.get("notes_data")
+
         # Include account_id, facility_id, and user_id in response if provided
         if account_id:
             response_data["account_id"] = account_id
@@ -153,7 +173,7 @@ def chat():
             response_data["facility_id"] = facility_id
         if user_id:
             response_data["user_id"] = user_id
-        
+
         return jsonify(response_data)
         
     except Exception as e:
@@ -191,6 +211,10 @@ def chat_info():
             "facility_id": "Required: Facility ID for context (if account_id not provided)",
             "user_id": "Required: User ID (email) for all requests",
             "conversation_id": "Optional: Conversation ID to continue existing conversation"
+        },
+        "validation_rules": {
+            "user_id": "Always required - cannot be empty",
+            "account_id_or_facility_id": "At least one must be provided - both cannot be empty"
         }
     })
 
@@ -214,6 +238,10 @@ def root():
                 "facility_id": "Facility ID for context (required if account_id not provided)",
                 "user_id": "User ID (email) - required for all requests",
                 "conversation_id": "Optional conversation ID to continue existing conversation"
+            },
+            "validation_rules": {
+                "user_id": "Always required - cannot be empty",
+                "account_id_or_facility_id": "At least one must be provided - both cannot be empty"
             }
         },
         "examples": [
